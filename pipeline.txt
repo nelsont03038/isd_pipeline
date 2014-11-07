@@ -1,0 +1,61 @@
+################
+# ISD pipeline #
+################
+
+This pipeline shows a simple way to use NGS to determine the site of integration for any transgenic sequence 
+in a genome.  There are multiple ways to perform the actual sequencing and it is beyond teh scope of this tutorial.
+But briefly, perform whole genome resequencing, or targetted resequencing on your genome of interest.  Whole genome 
+resequencing would be more expensive as it is many more reads.  Targetted resequencing is more complicated however 
+as you need to design capture probes against your sequence of interst, and perform sequence capture prior to sequencing.
+Either way, once you have the raw data in hand, you can perform these simple steps.  This algorithm takes advantage 
+of the way BWA does global alignments and reports secondary alignments in the resulting SAM alignment file.  Please
+see http://samtools.github.io/hts-specs/SAMv1.pdf for a detailed description of the SAM format specification.  
+In a nutshell, BWA in global alignment mode will make split read alignments.  So chimeric reads that span the insert 
+site junctions will have secondary alignments if you add the vector sequence to the genome prior to mapping.  
+Follow these simple steps:
+
+#Add your transgenic (vector) sequence to the genome file, name it "vector" in the fasta header, for example:
+cat vector.fa >> genome.fa
+
+#Index the genome (including the insert sequence) for bwa
+bwa index genome.fa &
+
+#Do mapping with bwa mem (larger k-mer size reduces false chimeric mappings, use a higher penalty for clipping L 
+#to also help reduce false positives)
+bwa mem -L 8 -B 6 -k 39 cho_genome.fa  reads1_forward.fq reads1_reverse.fq > 1.sam &
+bwa mem -L 8 -B 6 -k 39 cho_genome.fa  reads2_forward.fq reads2_reverse.fq > 2.sam &
+
+#make samtools index of reference sequence for use by samtools
+samtools faidx genome.fa &
+
+#convert the SAM files to BAM file (binary sam)
+samtools import genome.fa.fai 1.sam 1.bam &
+samtools import genome.fa.fai 2.sam 2.bam &
+
+#sort the BAM files (for merge)
+samtools sort 1.bam 1.sorted &
+samtools sort 2.bam 2.sorted &
+
+#merge the bam files (you only need this if you have multiple BAM files)
+samtools merge alignment.bam 1.sorted.bam 2.sorted.bam &
+
+#sort the final BAM file
+samtools sort alignment.bam alignment.sorted &
+
+#index the bam file (for samtools and IGV)
+samtools index alignment.sorted.bam &
+
+#get chimeric reads that map to the vector
+#this algorithm returns all records (read alignments) that are not secondary (hard clipped) which have a secondary 
+#alignment, and either the secondary alignment or the primary alignment is with the vector.  In other words, 
+#chimeric reads that map to the vector and somewhere else in the genome (the insert site)
+#write the reads to a sam formatted file called results.sam
+#the column that contains the secondary alignment might be different if you have a different version of bwa 
+#(instead of column 15 it might be column 16
+samtools view -F 0x800 alignment.sorted.bam | awk '$15 ~ /SA/ && ($15 ~ /vector/ || $3 ~ /vector/) { print }' > results.sam &
+
+
+Then simply examine the chimeric reads in the results.sam file (for instance in Microsoft Excel) and determine 
+the insert site location from the primary and secondary hit locations
+
+This pipeline will include simultated data in the near future so there will be examples to look at.
